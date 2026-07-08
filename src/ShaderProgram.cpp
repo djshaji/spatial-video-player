@@ -130,6 +130,13 @@ void ShaderProgram::bind() const {
     glUseProgram(programId_);
 }
 
+void ShaderProgram::setInt(const std::string& uniformName, int value) const {
+    const int location = glGetUniformLocation(programId_, uniformName.c_str());
+    if (location >= 0) {
+        glUniform1i(location, value);
+    }
+}
+
 void ShaderProgram::setMat4(const std::string& uniformName, const glm::mat4& value) const {
     const int location = glGetUniformLocation(programId_, uniformName.c_str());
     if (location >= 0) {

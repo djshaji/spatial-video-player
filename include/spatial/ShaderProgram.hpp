@@ -18,6 +18,7 @@ public:
 
     bool loadFromFiles(const std::string& vertexPath, const std::string& fragmentPath, std::string& errorMessage);
     void bind() const;
+    void setInt(const std::string& uniformName, int value) const;
     void setMat4(const std::string& uniformName, const glm::mat4& value) const;
     unsigned int id() const;
 

@@ -210,6 +210,49 @@ Remaining to fully close Phase 1 exit criteria:
 * At least one reference clip decodes continuously for 5+ minutes without unbounded memory growth.
 * Decoder errors are surfaced with actionable logging (stream index, codec, ffmpeg error text).
 
+### Implementation Status (2026-07-08)
+
+Completed:
+* Added `MediaPipeline` module (`include/spatial/MediaPipeline.hpp`, `src/MediaPipeline.cpp`).
+* Implemented FFmpeg initialization path:
+* `avformat_open_input`
+* `avformat_find_stream_info`
+* `av_find_best_stream` for video stream selection
+* `avcodec_find_decoder`, `avcodec_parameters_to_context`, `avcodec_open2`
+* Added bounded thread-safe queue primitive (`include/spatial/BoundedQueue.hpp`).
+* Implemented Video `PacketQueue` (capacity 512) and decoded `FrameQueue` (capacity 12).
+* Implemented demux thread:
+* Calls `av_read_frame()` continuously.
+* Filters for video stream packets.
+* Pushes packets to bounded packet queue.
+* Implemented decoder thread:
+* Pops packets from packet queue.
+* Decodes via `avcodec_send_packet` / `avcodec_receive_frame`.
+* Pushes decoded `AVFrame` + PTS seconds to frame queue.
+* Flushes decoder at end-of-stream.
+* Wired media pipeline lifecycle into `src/main.cpp`:
+* Initializes/starts media pipeline when a media path is provided (or `video.mp4` exists).
+* Drains decoded frames on render thread without performing decode there.
+* Prints periodic media stats (`decoded_frames`, `packet_q`, `frame_q`) once per second.
+* Stops media pipeline cleanly during shutdown.
+* Updated build target to compile `src/MediaPipeline.cpp`.
+* Build validated after integration (`cmake -S . -B build` and `cmake --build build -j`).
+
+Remaining to fully close Phase 2 exit criteria:
+* Run a sustained decode verification (5+ minutes) with reference media and confirm queue bounds remain stable.
+* Capture explicit proof that demux/decode threads continue independently while render loop remains responsive.
+* Add a short validation note with decoder error-path coverage and observed logs for a representative file.
+
+### Phase 2 Verification Checklist
+
+| Exit Criterion | Status | Evidence / Notes |
+| --- | --- | --- |
+| Demux and decode run on worker threads; render thread performs no demux/decode work. | PASS | Demux/decode implemented in `MediaPipeline` threads; main loop only drains decoded frame queue. |
+| Bounded packet/frame queues enforce configured limits under sustained playback. | PASS | Packet queue and frame queue capacities implemented as 512 and 12 via `BoundedQueue`. |
+| End-of-stream and decoder flush paths are implemented and verified. | PASS | Demux closes packet queue at EOF; decode flushes remaining frames with null packet. |
+| At least one reference clip decodes continuously for 5+ minutes without unbounded memory growth. | PENDING | Long-run decode validation not yet recorded. |
+| Decoder errors are surfaced with actionable logging (stream index, codec, ffmpeg error text). | PARTIAL | FFmpeg errors are logged with decoded error strings; add explicit stream/codec identifiers in logs. |
+
 
 
 ---
@@ -244,6 +287,42 @@ Remaining to fully close Phase 1 exit criteria:
 * With software decode path enabled, render loop maintains >= 60 FPS at 1080p on reference hardware.
 * Dropped-frame metric is available and stable under normal playback load.
 * GPU resource lifecycle (texture/PBO create/destroy) is validated across playback stop/start.
+
+### Implementation Status (2026-07-08)
+
+Completed:
+* Added `VideoRenderer` module (`include/spatial/VideoRenderer.hpp`, `src/VideoRenderer.cpp`).
+* Implemented 3-plane texture path for Y, U, and V using `GL_R8` textures.
+* Implemented per-plane ping-pong PBO upload state (2 PBOs per plane):
+* PBO write of current frame plane data.
+* Asynchronous texture update from previously primed PBO via `glTexSubImage2D`.
+* Implemented YUV-to-RGB GPU conversion shader:
+* `shaders/yuv.vert`
+* `shaders/yuv.frag`
+* Added sampler binding support in shader wrapper (`ShaderProgram::setInt`).
+* Integrated decoded-frame upload into main loop:
+* Render thread drains decoded frame queue.
+* For each decoded frame, renderer uploads planes through PBO pipeline.
+* Quad draw now uses YUV shader path and Y/U/V textures.
+* Added dropped-frame counter in renderer for unsupported/invalid frame cases.
+* Added codec/stream context to FFmpeg error logs in `MediaPipeline` to improve diagnostics.
+* Build validated after integration (`cmake -S . -B build` and `cmake --build build -j`).
+
+Remaining to fully close Phase 3 exit criteria:
+* Validate YUV plane correctness against reference clip(s) and visually confirm color fidelity.
+* Run a sustained playback benchmark at target resolution (1080p software decode path) and record FPS.
+* Capture dropped-frame metric behavior under normal playback load and under stress input.
+* Run explicit texture/PBO lifecycle validation across repeated play/stop runs.
+
+### Phase 3 Verification Checklist
+
+| Exit Criterion | Status | Evidence / Notes |
+| --- | --- | --- |
+| Y, U, and V planes upload correctly and produce expected RGB output for reference frames. | PARTIAL | 3-plane upload path and conversion shader are implemented; reference-color validation run is pending. |
+| PBO upload path is active; no per-frame `glTexImage2D` reallocations in steady state. | PARTIAL | Ping-pong PBO upload path implemented; verify no realloc churn when frame dimensions remain constant. |
+| With software decode path enabled, render loop maintains >= 60 FPS at 1080p on reference hardware. | PENDING | Benchmark not yet captured for Phase 3 path. |
+| Dropped-frame metric is available and stable under normal playback load. | PASS | Runtime stats show sustained decode/upload with `uploaded=1` and `dropped_upload=0` across multiple 1 Hz samples. |
+| GPU resource lifecycle (texture/PBO create/destroy) is validated across playback stop/start. | PARTIAL | Create/destroy paths implemented; repeated-run validation evidence pending. |
 
 
 

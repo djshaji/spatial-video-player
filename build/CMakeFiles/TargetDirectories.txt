@@ -1,3 +1,0 @@
-/home/djshaji/projects/spatial-player/build/CMakeFiles/spatial_player.dir
-/home/djshaji/projects/spatial-player/build/CMakeFiles/edit_cache.dir
-/home/djshaji/projects/spatial-player/build/CMakeFiles/rebuild_cache.dir

@@ -30,7 +30,9 @@ add_executable(spatial_player
     src/main.cpp
     src/Camera.cpp
     src/Geometry.cpp
+    src/MediaPipeline.cpp
     src/ShaderProgram.cpp
+    src/VideoRenderer.cpp
 )
 
 target_include_directories(spatial_player PRIVATE include)

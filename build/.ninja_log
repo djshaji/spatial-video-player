@@ -1,6 +1,0 @@
-# ninja log v7
-4	1187	1783522410121374034	CMakeFiles/spatial_player.dir/src/Geometry.cpp.o	48753e793f579824
-2	1727	1783522410119374064	CMakeFiles/spatial_player.dir/src/main.cpp.o	7fdd59209fe4583c
-6	1994	1783522410123374002	CMakeFiles/spatial_player.dir/src/ShaderProgram.cpp.o	a9d3339e366156c5
-5	709	1783522432737024991	CMakeFiles/spatial_player.dir/src/Camera.cpp.o	d9a08239020576d5
-710	1443	1783522433442014110	spatial_player	5364d92efc0d2722
