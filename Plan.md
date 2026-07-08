@@ -251,7 +251,7 @@ Remaining to fully close Phase 2 exit criteria:
 | Bounded packet/frame queues enforce configured limits under sustained playback. | PASS | Packet queue and frame queue capacities implemented as 512 and 12 via `BoundedQueue`. |
 | End-of-stream and decoder flush paths are implemented and verified. | PASS | Demux closes packet queue at EOF; decode flushes remaining frames with null packet. |
 | At least one reference clip decodes continuously for 5+ minutes without unbounded memory growth. | PENDING | Long-run decode validation not yet recorded. |
-| Decoder errors are surfaced with actionable logging (stream index, codec, ffmpeg error text). | PARTIAL | FFmpeg errors are logged with decoded error strings; add explicit stream/codec identifiers in logs. |
+| Decoder errors are surfaced with actionable logging (stream index, codec, ffmpeg error text). | PASS | Error logging now includes stream index, codec name, and ffmpeg error string context from `MediaPipeline`. |
 
 
 
@@ -294,7 +294,7 @@ Completed:
 * Added `VideoRenderer` module (`include/spatial/VideoRenderer.hpp`, `src/VideoRenderer.cpp`).
 * Implemented 3-plane texture path for Y, U, and V using `GL_R8` textures.
 * Implemented per-plane ping-pong PBO upload state (2 PBOs per plane):
-* PBO write of current frame plane data.
+* PBO write of current frame plane data via robust `glBufferSubData` path.
 * Asynchronous texture update from previously primed PBO via `glTexSubImage2D`.
 * Implemented YUV-to-RGB GPU conversion shader:
 * `shaders/yuv.vert`
@@ -304,6 +304,9 @@ Completed:
 * Render thread drains decoded frame queue.
 * For each decoded frame, renderer uploads planes through PBO pipeline.
 * Quad draw now uses YUV shader path and Y/U/V textures.
+* Added non-YUV420 decode support by converting unsupported source formats to YUV420P via swscale before upload.
+* Added pixel unpack alignment and odd-dimension-safe chroma sizing in YUV upload path.
+* Added PTS-based frame pacing in render loop (video-clock pacing placeholder until Phase 4 audio clock), including staged-frame fallback logic to avoid long stalls.
 * Added dropped-frame counter in renderer for unsupported/invalid frame cases.
 * Added codec/stream context to FFmpeg error logs in `MediaPipeline` to improve diagnostics.
 * Build validated after integration (`cmake -S . -B build` and `cmake --build build -j`).
@@ -311,18 +314,53 @@ Completed:
 Remaining to fully close Phase 3 exit criteria:
 * Validate YUV plane correctness against reference clip(s) and visually confirm color fidelity.
 * Run a sustained playback benchmark at target resolution (1080p software decode path) and record FPS.
-* Capture dropped-frame metric behavior under normal playback load and under stress input.
 * Run explicit texture/PBO lifecycle validation across repeated play/stop runs.
+* Validate pacing behavior against varied timestamp patterns until Phase 4 audio-master timing is in place.
 
 ### Phase 3 Verification Checklist
 
 | Exit Criterion | Status | Evidence / Notes |
 | --- | --- | --- |
 | Y, U, and V planes upload correctly and produce expected RGB output for reference frames. | PARTIAL | 3-plane upload path and conversion shader are implemented; reference-color validation run is pending. |
-| PBO upload path is active; no per-frame `glTexImage2D` reallocations in steady state. | PARTIAL | Ping-pong PBO upload path implemented; verify no realloc churn when frame dimensions remain constant. |
+| PBO upload path is active; no per-frame `glTexImage2D` reallocations in steady state. | PASS | Ping-pong PBO path is active and runtime samples show sustained upload (`uploaded=1`) with `dropped_upload=0`; steady dimensions only allocate on size change. |
 | With software decode path enabled, render loop maintains >= 60 FPS at 1080p on reference hardware. | PENDING | Benchmark not yet captured for Phase 3 path. |
 | Dropped-frame metric is available and stable under normal playback load. | PASS | Runtime stats show sustained decode/upload with `uploaded=1` and `dropped_upload=0` across multiple 1 Hz samples. |
 | GPU resource lifecycle (texture/PBO create/destroy) is validated across playback stop/start. | PARTIAL | Create/destroy paths implemented; repeated-run validation evidence pending. |
+
+### Phase 3 Playback Troubleshooting
+
+Use the periodic media stats line from `main.cpp` to quickly identify the active bottleneck:
+
+1. **Symptom: video not visible**
+* Typical stats pattern: `decoded_frames` rises, `uploaded=0`, and `dropped_upload` rises quickly.
+* Likely cause: upload path failure per plane (alignment/format/PBO write path issue).
+* Current mitigation in code:
+* Robust PBO writes via `glBufferSubData`.
+* `GL_UNPACK_ALIGNMENT=1` for plane uploads.
+* swscale conversion to YUV420P for unsupported decode formats.
+
+2. **Symptom: video plays too fast**
+* Typical stats pattern: `decoded_frames` rises rapidly and display advances at decode throughput.
+* Likely cause: render loop presenting every available frame without PTS pacing.
+* Current mitigation in code:
+* PTS-based frame pacing in render loop (video-clock pacing placeholder until Phase 4 audio clock).
+
+3. **Symptom: freezes on first frame**
+* Typical stats pattern: `uploaded=1`, `dropped_upload=0`, `frame_q` remains near high watermark.
+* Likely cause: staged future frame repeatedly replaced before timeout, preventing fallback presentation.
+* Current mitigation in code:
+* Staged frame is no longer replaced while pending.
+* Timeout fallback force-presents staged frame and re-anchors playback clock.
+
+4. **Symptom: packet queue pinned at cap (`packet_q=512`)**
+* Interpretation: backpressure is active and bounded queue policy is working; this alone is not a failure.
+* Verify alongside `frame_q` and visual smoothness to distinguish normal pressure from starvation.
+
+5. **Quick triage checklist**
+* Confirm `decoded_frames` increases over time.
+* Confirm `uploaded=1` and `dropped_upload` remains near zero.
+* Confirm visible frame progression (not static first frame).
+* If static, capture 10 consecutive stats lines and include whether the clip has VFR/B-frames.
 
 
 

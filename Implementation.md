@@ -1,10 +1,8 @@
-# Phase 1 Implementation Architecture
+# Implementation Architecture (Phase 1-3)
 
-This document describes the current code architecture implemented for Phase 1 (Environment Setup and 3D Foundations).
+This document describes the current architecture implemented across Phase 1 (3D foundations), Phase 2 (demux/decode pipeline), and Phase 3 (YUV texture upload and shader rendering).
 
-## 1. Files Created
-
-The following implementation files were created as part of Phase 1 scaffolding.
+## 1. Files Implemented
 
 ### Build and Configuration
 
@@ -12,322 +10,221 @@ The following implementation files were created as part of Phase 1 scaffolding.
 
 ### Public Headers
 
+- `include/spatial/BoundedQueue.hpp`
 - `include/spatial/Camera.hpp`
 - `include/spatial/Geometry.hpp`
+- `include/spatial/MediaPipeline.hpp`
 - `include/spatial/ShaderProgram.hpp`
+- `include/spatial/VideoRenderer.hpp`
 
 ### Source Files
 
 - `src/main.cpp`
 - `src/Camera.cpp`
 - `src/Geometry.cpp`
+- `src/MediaPipeline.cpp`
 - `src/ShaderProgram.cpp`
+- `src/VideoRenderer.cpp`
 
 ### Shader Assets
 
 - `shaders/basic.vert`
 - `shaders/basic.frag`
+- `shaders/yuv.vert`
+- `shaders/yuv.frag`
 
-## 2. Classes and Functions in Each File
+## 2. Modules, Classes, and Functions
 
 ### CMakeLists.txt
 
 Role:
 - Defines the `spatial_player` C++17 executable.
-- Locates OpenGL, GLFW, GLM, and FFmpeg (via pkg-config).
-- Adds compile warnings (`-Wall -Wextra -Wpedantic`) when enabled.
-- Copies `shaders/` to the build directory for runtime shader loading.
+- Locates OpenGL, GLFW, GLM, FFmpeg packages.
+- Enables strict warnings for GCC/Clang.
+- Copies `shaders/` into build output.
 
-Primary CMake constructs:
-- `project(spatial_player ...)`
-- `find_package(...)`
-- `pkg_check_modules(FFMPEG ...)`
-- `add_executable(spatial_player ...)`
-- `target_link_libraries(...)`
+### include/spatial/BoundedQueue.hpp
 
-### include/spatial/Camera.hpp
+Class template:
+- `template <typename T> class BoundedQueue`
+
+Key methods:
+- `push(T item)` blocking push with capacity/backpressure.
+- `pop(T& out)` blocking pop.
+- `tryPop(T& out)` non-blocking pop.
+- `close()` wakes blocked producers/consumers.
+- `size()` returns queue depth.
+
+### include/spatial/Camera.hpp and src/Camera.cpp
 
 Types:
 - `enum class CameraMove`
-	- Directions: `Forward`, `Backward`, `Left`, `Right`, `Up`, `Down`.
 
 Class:
-- `class Camera`
+- `Camera`
 
-Public methods:
-- `Camera(float width, float height)`
-- `void processKeyboard(CameraMove move, float deltaSeconds)`
-- `void processMouseDelta(float deltaX, float deltaY)`
-- `glm::mat4 viewMatrix() const`
-- `glm::mat4 projectionMatrix() const`
-- `glm::vec3 position() const`
+Key methods:
+- `processKeyboard(...)` for translation.
+- `processMouseDelta(...)` for yaw/pitch and quaternion orientation updates.
+- `viewMatrix()` and `projectionMatrix()` for MVP pipeline.
 
-Private methods:
-- `void clampPitch()`
-
-State:
-- Position, orientation quaternion, yaw/pitch, movement and mouse parameters, and projection parameters.
-
-### src/Camera.cpp
-
-Implements `spatial::Camera` behavior.
-
-Internal constants (anonymous namespace):
-- `kMaxPitchDeg`
-- `kWorldUp`
-
-Function behavior:
-- `Camera::Camera(...)`
-	- Initializes camera defaults and computes initial orientation.
-- `Camera::processKeyboard(...)`
-	- Moves camera in local forward/right/up axes based on frame delta time.
-- `Camera::processMouseDelta(...)`
-	- Updates yaw and pitch using sensitivity, clamps pitch, rebuilds quaternion orientation.
-- `Camera::viewMatrix() const`
-	- Uses `glm::lookAt` from current pose.
-- `Camera::projectionMatrix() const`
-	- Uses perspective projection.
-- `Camera::position() const`
-	- Returns world-space camera position.
-- `Camera::clampPitch()`
-	- Prevents over-rotation beyond +/-89 degrees.
-
-### include/spatial/Geometry.hpp
+### include/spatial/Geometry.hpp and src/Geometry.cpp
 
 Types:
 - `struct MeshData`
-	- `std::vector<float> vertices`
-	- `std::vector<std::uint32_t> indices`
 
 Factory functions:
-- `MeshData createTexturedQuad()`
-- `MeshData createInvertedSphere(std::uint32_t latitudeSegments, std::uint32_t longitudeSegments, float radius)`
-
-### src/Geometry.cpp
-
-Implements mesh generation.
-
-Functions:
 - `createTexturedQuad()`
-	- Creates a 4-vertex quad with position + UV layout.
-	- Emits 2 triangles via index buffer.
 - `createInvertedSphere(...)`
-	- Validates segment/radius inputs.
-	- Generates sphere vertices using latitude-longitude parameterization.
-	- Writes inverted winding order for inside-facing rendering (360 view use case).
 
-### include/spatial/ShaderProgram.hpp
+### include/spatial/ShaderProgram.hpp and src/ShaderProgram.cpp
 
 Class:
-- `class ShaderProgram`
+- `ShaderProgram`
 
-Special member behavior:
-- Copy operations deleted.
-- Move constructor and move assignment enabled.
-- Destructor releases OpenGL program.
+Key methods:
+- `loadFromFiles(...)` compile/link pipeline.
+- `bind()`
+- `setInt(...)` for sampler uniforms.
+- `setMat4(...)` for matrix uniforms.
 
-Public methods:
-- `bool loadFromFiles(const std::string& vertexPath, const std::string& fragmentPath, std::string& errorMessage)`
-- `void bind() const`
-- `void setMat4(const std::string& uniformName, const glm::mat4& value) const`
-- `unsigned int id() const`
+### include/spatial/MediaPipeline.hpp and src/MediaPipeline.cpp
 
-### src/ShaderProgram.cpp
+Class:
+- `MediaPipeline`
 
-Implements shader loading, compilation, linking, and uniform updates.
+Key responsibilities:
+- FFmpeg open/stream discovery/decoder init.
+- Packet queue and decoded frame queue ownership.
+- Worker thread lifecycle (`demuxLoop`, `decodeLoop`).
+- Decoder flush at end-of-stream.
+- Stream/codec-context error logging.
 
-Internal helper functions (anonymous namespace):
-- `std::string readTextFile(const std::string& path)`
-	- Reads whole shader file into memory.
-- `unsigned int compileStage(unsigned int stageType, const std::string& source, std::string& errorMessage)`
-	- Compiles one shader stage and returns shader handle or 0 on failure.
+Key API:
+- `initialize(mediaPath, errorMessage)`
+- `start(errorMessage)`
+- `stop()`
+- `tryPopDecodedFrame(...)`
+- queue depth and decoded-frame counters.
 
-Class method implementations:
-- `~ShaderProgram()`
-	- Deletes GL program if created.
-- `ShaderProgram(ShaderProgram&& other) noexcept`
-- `ShaderProgram& operator=(ShaderProgram&& other) noexcept`
-	- Transfers GL program ownership.
-- `loadFromFiles(...)`
-	- Reads source files, compiles vertex/fragment, links program, reports errors.
-- `bind() const`
-	- Activates the GL program.
-- `setMat4(...) const`
-	- Finds uniform location and uploads matrix if present.
-- `id() const`
-	- Returns raw program handle.
+### include/spatial/VideoRenderer.hpp and src/VideoRenderer.cpp
+
+Class:
+- `VideoRenderer`
+
+Key responsibilities:
+- 3-plane Y/U/V texture allocation (`GL_R8`).
+- Per-plane ping-pong PBO upload state.
+- Decoded frame upload path from `MediaPipeline` frames.
+- Non-YUV420 input conversion to YUV420P via swscale.
+- YUV->RGB shader binding and sampler setup.
+- Upload diagnostics (`hasUploadedFrame`, `droppedFrameCount`).
+
+Key API:
+- `initialize(errorMessage)`
+- `uploadDecodedFrame(decodedFrame)`
+- `render(model, view, projection)`
 
 ### src/main.cpp
 
 Role:
-- Contains application startup, OpenGL setup, input registration, mesh upload, render loop, and shutdown.
+- Orchestrates app lifecycle and integration of all subsystems.
 
-Internal types/functions (anonymous namespace):
-- `struct InputState`
-	- Tracks first-mouse state and last cursor position.
-	- Holds a `spatial::Camera*` used by callbacks.
-- `InputState gInputState`
-	- Global callback bridge state.
-- `void framebufferSizeCallback(GLFWwindow*, int width, int height)`
-	- Updates viewport on resize.
-- `void mouseCallback(GLFWwindow*, double xpos, double ypos)`
-	- Converts cursor deltas into camera look updates.
-- `void processMovement(GLFWwindow* window, spatial::Camera& camera, float deltaSeconds)`
-	- Polls keyboard movement keys (W/A/S/D/E/Q) and moves camera.
+Key internal callbacks/helpers:
+- `framebufferSizeCallback(...)`
+- `mouseCallback(...)`
+- `processMovement(...)`
 
-Entry point:
-- `int main()`
-	- Initializes GLFW and OpenGL context.
-	- Creates camera and shader program.
-	- Generates quad mesh, uploads VAO/VBO/EBO.
-	- Runs frame loop (input -> update -> render -> swap/poll).
-	- Releases GL objects and terminates GLFW.
+Main loop integration points:
+- Initializes OpenGL resources and camera.
+- Starts `MediaPipeline` when media is provided.
+- Drains decoded frames and feeds `VideoRenderer`.
+- Uses PTS-based pacing fallback logic so frames are not rendered at decode speed.
+- Renders quad with YUV shader path.
+- Prints periodic media stats.
 
-### shaders/basic.vert
+## 3. Control Flow
 
-Stage:
-- Vertex shader.
+### Initialization Flow
 
-Inputs:
-- `aPos` (vec3 position)
-- `aUv` (vec2 texture coordinates)
+1. Initialize GLFW and OpenGL context.
+2. Create camera and input callbacks.
+3. Build quad geometry (VAO/VBO/EBO).
+4. Initialize `VideoRenderer` (YUV shader + textures).
+5. Initialize and start `MediaPipeline` threads (if media path available).
 
-Uniforms:
-- `uModel`, `uView`, `uProjection`
+### Runtime Flow (Per Frame)
 
-Outputs:
-- `vUv`
+1. Poll input and update camera.
+2. Pop decoded frames from `MediaPipeline`.
+3. Apply PTS pacing logic in `main`.
+4. Upload selected frame planes via `VideoRenderer` PBO path.
+5. Clear frame, bind YUV textures/shader, upload MVP matrices.
+6. Draw quad and swap buffers.
 
-Behavior:
-- Applies MVP transform and forwards UV to fragment stage.
+### Media Threading Flow
 
-### shaders/basic.frag
+1. `demuxLoop` reads packets and pushes video packets into bounded packet queue.
+2. `decodeLoop` consumes packets and pushes decoded frames with PTS into bounded frame queue.
+3. Main thread consumes decoded frames without decoding work on render thread.
 
-Stage:
-- Fragment shader.
+### Shutdown Flow
 
-Inputs/Outputs:
-- Input: `vUv`
-- Output: `FragColor`
-
-Behavior:
-- Produces a simple UV-based color gradient for visual validation.
-
-## 3. Program Control Flow
-
-The executable currently follows a classic game/render loop architecture:
-
-1. Initialization
-- `main()` initializes GLFW.
-- Requests OpenGL 3.3 Core profile.
-- Creates window and current context.
-- Registers resize callback.
-- Enables depth testing.
-- Creates camera and registers mouse callback.
-- Loads/compiles/links shaders via `ShaderProgram::loadFromFiles`.
-- Builds quad geometry and uploads VAO/VBO/EBO buffers.
-
-2. Per-Frame Loop
-- Compute `deltaSeconds` from `glfwGetTime()`.
-- Handle immediate exit key (`ESC`).
-- Apply movement input (`processMovement`).
-- Clear frame/depth buffers.
-- Bind shader.
-- Compute matrices:
-	- `model = identity`
-	- `view = camera.viewMatrix()`
-	- `projection = camera.projectionMatrix()`
-- Upload uniforms (`uModel`, `uView`, `uProjection`).
-- Draw indexed quad (`glDrawElements`).
-- Present frame (`glfwSwapBuffers`) and process events (`glfwPollEvents`).
-
-3. Callback-Driven Input Path
-- Mouse movement triggers `mouseCallback`.
-- `mouseCallback` computes deltas and calls `camera.processMouseDelta(...)`.
-- Keyboard movement is polled each frame inside `processMovement(...)`, calling `camera.processKeyboard(...)`.
-
-4. Shutdown
-- Exit loop when window should close.
-- Delete GL buffers and vertex array.
-- Destroy GLFW window.
-- Terminate GLFW.
+1. Exit render loop.
+2. Stop `MediaPipeline` and join worker threads.
+3. Destroy GL resources and window.
+4. Terminate GLFW.
 
 ## Runtime Flow Diagram
 
 ```mermaid
 flowchart TD
-		A[main] --> B[GLFW init and OpenGL 3.3 context]
-		B --> C[Create Camera and register callbacks]
-		C --> D[Load shaders via ShaderProgram]
-		D --> E[Generate quad mesh and upload VAO/VBO/EBO]
-		E --> F{Window open?}
-		F -->|Yes| G[Compute deltaSeconds]
-		G --> H[Poll keyboard and update camera]
-		H --> I[Clear color/depth]
-		I --> J[Build model/view/projection matrices]
-		J --> K[Bind shader and upload uniforms]
-		K --> L[Draw indexed quad]
-		L --> M[Swap buffers and poll events]
-		M --> F
-		F -->|No| N[Delete GL resources]
-		N --> O[Destroy window and terminate GLFW]
+    A[main] --> B[GLFW/OpenGL init]
+    B --> C[Camera and callbacks]
+    C --> D[Quad VAO/VBO/EBO setup]
+    D --> E[VideoRenderer init]
+    E --> F[MediaPipeline init/start]
+    F --> G{Window open?}
+    G -->|Yes| H[Input and camera update]
+    H --> I[Drain decoded frames]
+    I --> J[PTS pacing select frame]
+    J --> K[YUV plane upload via PBO]
+    K --> L[Render quad with YUV shader]
+    L --> M[Swap buffers and poll events]
+    M --> G
+    G -->|No| N[Stop pipeline and join threads]
+    N --> O[Destroy GL/window resources]
 ```
 
-## Input-to-Draw Sequence Diagram
+## Input-to-Draw Sequence Diagram (Current)
 
 ```mermaid
 sequenceDiagram
-	participant User
-	participant GLFW
-	participant MainLoop as main loop
-	participant Input as processMovement
-	participant MouseCB as mouseCallback
-	participant Camera
-	participant Shader as ShaderProgram
-	participant GL as OpenGL
+    participant User
+    participant GLFW
+    participant Main as main loop
+    participant Camera
+    participant Pipeline as MediaPipeline
+    participant Renderer as VideoRenderer
+    participant GL as OpenGL
 
-	Note over MainLoop: Repeats once per frame while window is open
-
-	User->>GLFW: Move mouse / press keys
-
-	alt Mouse movement event
-		GLFW->>MouseCB: cursor position callback
-		MouseCB->>Camera: processMouseDelta(deltaX, deltaY)
-		Camera->>Camera: update yaw/pitch and quaternion orientation
-	end
-
-	MainLoop->>GLFW: glfwGetTime() / window close key check
-	MainLoop->>Input: processMovement(window, camera, deltaSeconds)
-
-	Input->>GLFW: glfwGetKey(W/A/S/D/E/Q)
-	alt Key is pressed
-		Input->>Camera: processKeyboard(direction, deltaSeconds)
-		Camera->>Camera: update world position using orientation axes
-	end
-
-	MainLoop->>GL: glClear(color + depth)
-	MainLoop->>Shader: bind()
-
-	MainLoop->>Camera: viewMatrix()
-	Camera-->>MainLoop: view matrix
-	MainLoop->>Camera: projectionMatrix()
-	Camera-->>MainLoop: projection matrix
-
-	MainLoop->>Shader: setMat4(uModel, model)
-	MainLoop->>Shader: setMat4(uView, view)
-	MainLoop->>Shader: setMat4(uProjection, projection)
-
-	MainLoop->>GL: glBindVertexArray(vao)
-	MainLoop->>GL: glDrawElements(GL_TRIANGLES, ...)
-
-	MainLoop->>GLFW: glfwSwapBuffers()
-	MainLoop->>GLFW: glfwPollEvents()
+    User->>GLFW: Mouse and keyboard input
+    GLFW-->>Main: Input state/events
+    Main->>Camera: processMouseDelta/processKeyboard
+    Main->>Pipeline: tryPopDecodedFrame(...)
+    Pipeline-->>Main: Decoded frame + PTS
+    Main->>Main: PTS pacing select frame
+    Main->>Renderer: uploadDecodedFrame(frame)
+    Main->>GL: Clear color/depth
+    Main->>Renderer: render(model, view, projection)
+    Main->>GL: glDrawElements(...)
+    Main->>GLFW: glfwSwapBuffers + glfwPollEvents
 ```
 
 ## Module Interaction Summary
 
-- `main.cpp` orchestrates lifecycle and frame loop.
-- `Camera` provides view/projection transforms and movement/orientation updates.
-- `Geometry` provides CPU-side mesh generation data.
-- `ShaderProgram` encapsulates shader lifecycle and uniform binding.
-- Shaders consume mesh attributes + camera transforms to produce final pixels.
+- `main.cpp` is the coordinator for input, timing, media consumption, and rendering.
+- `MediaPipeline` handles all FFmpeg demux/decode work off the render thread.
+- `VideoRenderer` owns GPU-side YUV textures/PBO uploads and YUV shader rendering.
+- `Camera` provides view/projection matrices and spatial movement.
+- `ShaderProgram` encapsulates OpenGL shader lifecycle and uniform uploads.
