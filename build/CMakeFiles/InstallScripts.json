@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/djshaji/projects/spatial-player/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
