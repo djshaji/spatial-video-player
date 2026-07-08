@@ -135,4 +135,4 @@ Phase 1 verification workflow is tracked in [Plan.md](Plan.md), including:
 
 ## License
 
-No license file has been added yet.
+MIT License. See [LICENSE](LICENSE) for details.
